@@ -1,0 +1,78 @@
+OK, so you want to backup a tree from one partition to another.  That's
+what rsyncbtrfs is for. If you want to backup stuff from and onto the
+same partition, just use the btrfs snapshot facility (not sure if you
+can call that a backup anymore).
+
+Let's learn about rsyncbtrfs with an example:
+We have a backup partition /dev/sdb1 which is mounted under /backup.
+We want to backup our root /, and our home directory /home/joe. We
+assume that / and /home/joe live on separate paritions.
+
+NOTE that the backup partition must be formatted as btrfs.
+
+Here's one way to structure the backup parition:
+
+$ mkdir /backup/home-joe
+$ mkdir /backup/sys
+
+So the backup of our home directory will reside under /backup/home-joe,
+etc.
+
+Next, we need to initialize each backup directory and we'll be half way
+there:
+
+$ rsyncbtrfs init /backup /backup/home-joe
+$ rsyncbtrfs init /backup /backup/sys
+
+The first argument is the root of the btrfs partition. rsyncbtrfs needs
+this so it can remount the volume as read/write at start and readonly in
+the end. All "init" does is that it creates a btrfs subvolume named
+"cur" under the given path.
+
+Now let's back it all up:
+
+$ rsyncbtrfs backup /backup /backup/home-joe /home/joe
+$ rsyncbtrfs backup /backup /backup/sys      /
+
+NOTE that rsyncbtrfs bind-mounts the source (e.g. /home/joe) under a
+temporary directory. This means that any other mount point under the
+source path will be ignored. If you wish to include any of those mount
+points, back them up separately. If you wish to exclude any from being
+backup up, use rsync's --exclude option following all the command line
+arguments of rsyncbtrfs. Here's an example:
+
+$ rsyncbtrfs backup /backup /backup/sys / --exclude='/tmp/**'
+
+Here, we prevent content of /tmp to be backed up.
+
+So at this point, you have backed up your home and root directories.
+Here is how your backup parition should look like now:
+
+/backup
+  |- home-joe
+     |- cur
+     \- 2010-09-09-12:55:55
+  \- sys
+     |- cur
+     \- 2010-09-09-16:55:55
+
+Obviously, the times and dates would be different. cur directory
+contains the latest version of your backup. The timestamped directories
+contain snapshots of cur each time after your backup. Thus if you run
+backup again, this is how your backup partition will look like:
+
+/backup
+  |- home-joe
+     |- cur
+     |- 2010-09-09-12:55:55
+     \- 2010-12-30-20:00:00
+  \- sys
+     |- cur
+     |- 2010-09-09-12:55:55
+     \- 2010-12-30-23:00:00
+
+At any point in time, cur would have the same content as the latest
+timestamped directory (e.g. cur is same as 2010-12-30-23:00:00).
+
+That's it folks. To see the command line options of rsyncbtrfs, run it
+bare.

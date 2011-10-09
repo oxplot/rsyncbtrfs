@@ -1,0 +1,111 @@
+#!/bin/sh
+# rsyncbtrfs - an rsync/btrfs combo backup system which uses the
+#              subvolume snapshot facilities of btrfs to perform
+#              incremental backups.
+# Copyright (C) 2010 Mansour <mansour@oxplot.com>
+#
+
+usage() {
+  echo "Usage: $0 action arg arg ..."
+  echo
+  echo " To initialize a backup directory:"
+  echo "       $0 init dest-root dest-dir"
+  echo " To backup src to dest (src-dir is passed onto rsync):"
+  echo "       $0 backup dest-root dest-dir src-dir"
+  echo " To sync a backup with another location:"
+  echo "       $0 sync dest-root dest-dir src-dir"
+  echo
+}
+
+case $1 in
+
+init)
+  [ $# -ge 3 ] || { usage $0; exit 255; }
+  if [ ! -e "$3"/cur ]
+  then
+    mount -o remount,rw "$2"
+    btrfs subvolume create "$3"/cur
+    mount -o remount,ro "$2"
+  fi
+;;
+
+backup)
+  [ $# -ge 4 ] || { usage $0; exit 255; }
+  TMP_MOUNT=/tmp/rsyncbtrfsmnt$$
+  BACKUP_ROOT="$2"
+  BACKUP_DIR="$3"
+  BACKUP_SRC="$4"
+
+  shift 4
+
+  # some checks
+
+  if [ ! -e "$BACKUP_DIR"/cur ]
+  then
+    echo "$BACKUP_DIR is not initialized"
+    exit 254
+  fi
+ 
+  trap "umount '""$TMP_MOUNT""';
+        rmdir '""$TMP_MOUNT""';
+        mount -o remount,ro '""$BACKUP_ROOT""';
+        " INT QUIT TERM EXIT
+  mount -o remount,rw "$BACKUP_ROOT"
+  mkdir "$TMP_MOUNT"
+  mount --bind "$BACKUP_SRC" "$TMP_MOUNT"
+  # use --inplace only when backing up using root since files with no
+  # write permissions cannot be updated using --inplace
+  rsync --delete --delete-before --delete-excluded --inplace \
+    --no-whole-file -a $@ "$TMP_MOUNT"/ "$BACKUP_DIR"/cur
+  /sbin/btrfs subvolume snapshot \
+    "$BACKUP_DIR"/cur "$BACKUP_DIR"/`date +%F-%T`
+;;
+
+sync)
+  [ $# -ge 4 ] || { usage $0; exit 255; }
+  BACKUP_ROOT=$2
+  BACKUP_DST=$3
+  BACKUP_SRC=$4
+
+  shift 4
+
+  [ -e $BACKUP_SRC ] || { echo $BACKUP_SRC does not exist; exit 254; }
+  [ -e $BACKUP_DST ] || { echo $BACKUP_DST does not exist; exit 254; }
+  [ -e $BACKUP_SRC/cur ] ||
+    { echo $BACKUP_SRC is not initialized; exit 254; }
+  [ -e $BACKUP_DST/cur ] ||
+    { echo $BACKUP_DST is not initialized; exit 254; }
+
+  trap "mount -o remount,ro '""$BACKUP_ROOT""';" INT QUIT TERM EXIT
+  mount -o remount,rw "$BACKUP_ROOT"
+
+  echo "Synching cur ..."
+  rsync --delete --delete-before --delete-excluded --inplace \
+    --no-whole-file -a $@ "$BACKUP_SRC"/cur/ "$BACKUP_DST"/cur
+  echo "Synching cur ... DONE"
+
+  # sync the snapshot directories
+  for ss in "$BACKUP_SRC"/[0-9]*
+  do
+    # create a new subvolume for this snapshot on the destination if one
+    # doesn't already exist
+    ss_dst="$BACKUP_DST"/`basename $ss`
+    if [ ! -e "$ss_dst" ]
+    then
+      /sbin/btrfs subvolume snapshot "$BACKUP_DST"/cur "$ss_dst"
+    fi
+    echo "Synching `basename $ss` snapshot ..."
+    rsync --delete --delete-before --delete-excluded --inplace \
+      --no-whole-file -a $@ "$ss"/ "$ss_dst"
+    echo "Synching `basename $ss` snapshot ... DONE"
+  done
+  
+;;
+
+*)
+  usage
+  exit 255
+;;
+esac
+
+exit 0

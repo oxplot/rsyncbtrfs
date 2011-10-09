@@ -1,0 +1,17 @@
+#!/bin/sh
+UUID=some-uuid
+
+# ensure the volume is mounted with compress option
+
+mount |
+  grep `findfs UUID=$UUID` |
+  grep compress &> /dev/null ||
+    { echo "Remount with compress"; exit 254; }
+
+BACKUP_ROOT=$(mount |
+              grep '^'`findfs UUID=$UUID` |
+              sed 's/^[^ ]\+ on \([^ ]\+\).*/\1/')
+
+./rsyncbtrfs sync $BACKUP_ROOT home /backup/home
+./rsyncbtrfs sync $BACKUP_ROOT sys /backup/sys
+./rsyncbtrfs sync $BACKUP_ROOT boot /backup/boot
