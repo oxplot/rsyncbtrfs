@@ -1,111 +1,268 @@
-#!/bin/sh
+#!/usr/bin/env python
 # rsyncbtrfs - an rsync/btrfs combo backup system which uses the
 #              subvolume snapshot facilities of btrfs to perform
 #              incremental backups.
-# Copyright (C) 2010 Mansour <mansour@oxplot.com>
+# Copyright (C) 2011 Mansour <mansour@oxplot.com>
 #
 
-usage() {
-  echo "Usage: $0 action arg arg ..."
-  echo
-  echo " To initialize a backup directory:"
-  echo "       $0 init dest-root dest-dir"
-  echo " To backup src to dest (src-dir is passed onto rsync):"
-  echo "       $0 backup dest-root dest-dir src-dir"
-  echo " To sync a backup with another location:"
-  echo "       $0 sync dest-root dest-dir src-dir"
-  echo
-}
+from subprocess import call, Popen, PIPE
+import sys
+import re
+import argparse
+import os
+import tempfile
+import time
+import glob
 
-case $1 in
+prog_name = 'rsyncbtrfs'
 
-init)
-  [ $# -ge 3 ] || { usage $0; exit 255; }
-  if [ ! -e "$3"/cur ]
-  then
-    mount -o remount,rw "$2"
-    btrfs subvolume create "$3"/cur
-    mount -o remount,ro "$2"
-  fi
-;;
+class RBError(Exception):
+  pass
 
-backup)
-  [ $# -ge 4 ] || { usage $0; exit 255; }
-  TMP_MOUNT=/tmp/rsyncbtrfsmnt$$
-  BACKUP_ROOT="$2"
-  BACKUP_DIR="$3"
-  BACKUP_SRC="$4"
+class RsyncBtrfs:
+  def __init__(self, args):
+    self.args = args
 
-  shift 4
+  def run(self):
+    try:
+      getattr(self, self.args.command)()
+    except Exception as e:
+      fatal(e.args[0])
 
-  # some checks
+  def init(self):
+    runprog('mount', '-o', 'remount,rw', self.args.dest_root)
+    runprog('btrfs', 'subvolume', 'create',
+            os.path.join(self.args.dest_dir, 'cur'))
+    runprog('mount', '-o', 'remount,ro', self.args.dest_root)
 
-  if [ ! -e "$BACKUP_DIR"/cur ]
-  then
-    echo "$BACKUP_DIR is not initialized"
-    exit 254
-  fi
- 
-  trap "umount '""$TMP_MOUNT""';
-        rmdir '""$TMP_MOUNT""';
-        mount -o remount,ro '""$BACKUP_ROOT""';
-        " INT QUIT TERM EXIT
-  mount -o remount,rw "$BACKUP_ROOT"
-  mkdir "$TMP_MOUNT"
-  mount --bind "$BACKUP_SRC" "$TMP_MOUNT"
-  # use --inplace only when backing up using root since files with no
-  # write permissions cannot be updated using --inplace
-  rsync --delete --delete-before --delete-excluded --inplace \
-    --no-whole-file -a $@ "$TMP_MOUNT"/ "$BACKUP_DIR"/cur
-  /sbin/btrfs subvolume snapshot \
-    "$BACKUP_DIR"/cur "$BACKUP_DIR"/`date +%F-%T`
-;;
+  def backup(self):
+    self.tmp_mountpt = tempfile.mkdtemp(suffix=prog_name)
+    try:
+      self._backup_helper()
+    finally:
+      runresil(runprog, 'umount', self.tmp_mountpt)
+      runresil(os.rmdir, self.tmp_mountpt)
+      runresil(runprog, 'mount', '-o', 'remount,ro',
+               self.args.dest_root)
 
-sync)
-  [ $# -ge 4 ] || { usage $0; exit 255; }
-  BACKUP_ROOT=$2
-  BACKUP_DST=$3
-  BACKUP_SRC=$4
+  def _backup_helper(self):
+    dest_root = self.args.dest_root
+    dest_dir = self.args.dest_dir
+    src_dir = self.args.src_dir
+    if not os.path.exists(os.path.join(dest_dir, 'cur')):
+      RBError("'%s' is not initialized" % dest_dir)
+    runprog('mount', '-o', 'remount,rw', self.args.dest_root)
+    runprog('mount', '--bind', src_dir, self.tmp_mountpt)
+    runprog(*(['rsync', '--delete', '--delete-before',
+            '--delete-excluded', '--inplace', '--no-whole-file',
+            '-a'] + self.args.rsync_args + [
+            self.tmp_mountpt + os.path.sep,
+            os.path.join(dest_dir, 'cur')]))
+    runprog('btrfs', 'subvolume', 'snapshot',
+            os.path.join(dest_dir, 'cur'),
+            os.path.join(dest_dir, tmsec2str(time.time())))
+    
+  def organize(self):
+    # sort the rules based on interval length
+    self.args.rules.sort(
+      cmp=lambda a, b: cmp(a.interval, b.interval)
+    )
+    # get the list of snapshots
+    snapshots_str = map(os.path.basename, glob.glob(
+      os.path.join(self.args.dest_dir, '????-??-??-??:??:??')
+    ))
+    if not snapshots_str:
+      return
+    snapshots_str.sort(reverse=True)
+    ss = map(tmstr2sec, snapshots_str)
+    # for each rule, determine the snapshots to be deleted
+    cur_ss, deletes, start_ts = 0, [], ss[0]
+    for cur_rule in self.args.rules:
+      end_ts = start_ts - (cur_rule.interval * cur_rule.count)
+      int_stop = start_ts
+      min_delta = float('inf')
+      while cur_ss < len(ss) and int_stop > end_ts and \
+            ss[cur_ss] > end_ts:
+        delta = abs(int_stop - ss[cur_ss])
+        if min_delta <= delta:
+          int_stop -= cur_rule.interval
+          min_delta = float('inf')
+          continue
+        else:
+          if min_delta != float('inf'):
+            deletes.append(snapshots_str[cur_ss - 1])
+          min_delta = delta
+        cur_ss += 1
+      start_ts = end_ts
+    # add all the unpicked ones to delete set
+    deletes.extend(snapshots_str[cur_ss:])
+    # do we just print the list?
+    if self.args.list:
+      if self.args.list == 'keep':
+        deletes = set(deletes)
+        for s in snapshots_str:
+          if s not in deletes: print s
+      else:
+        for d in deletes:
+          print d
+      return
+    # if we got nothing to delete, don't bother
+    if not deletes:
+      return
+    # delete all the marked snapshots
+    print "%d of total %d snapshots will be deleted." \
+          % (len(deletes), len(snapshots_str))
+    print "To see a list, use -l option."
+    confirm = raw_input('Continue (y/N)? ')
+    if confirm.strip().lower() != 'y':
+      return
+    runprog('mount', '-o', 'remount,rw', self.args.dest_root)
+    try:
+      for d in deletes:
+        runprog('btrfs', 'subvolume', 'delete',
+                os.path.join(self.args.dest_dir, d))
+    finally:
+      runresil(runprog, 'mount', '-o', 'remount,ro',
+               self.args.dest_root)
 
-  shift 4
+def tmstr2sec(t):
+  import re
+  m = re.match(r'(\d{4})-(\d{2})-(\d{2})-(\d{2}):(\d{2}):(\d{2})', t)
+  if m:
+    t = map(lambda a: int(m.group(a)), xrange(1, 7))
+    return int(time.mktime(time.struct_time(t + [0, 0, 0])))
+  else:
+    raise Exception("Invalid timestamp format in '%s'" % t)
 
-  [ -e $BACKUP_SRC ] || { echo $BACKUP_SRC does not exist; exit 254; }
-  [ -e $BACKUP_DST ] || { echo $BACKUP_DST does not exist; exit 254; }
-  [ -e $BACKUP_SRC/cur ] ||
-    { echo $BACKUP_SRC is not initialized; exit 254; }
-  [ -e $BACKUP_DST/cur ] ||
-    { echo $BACKUP_DST is not initialized; exit 254; }
+def tmsec2str(t):
+  ts = time.localtime(t)
+  return '%04d-%02d-%02d-%02d:%02d:%02d' % \
+         (ts.tm_year, ts.tm_mon, ts.tm_mday,
+          ts.tm_hour, ts.tm_min, ts.tm_sec)
 
-  trap "mount -o remount,ro '""$BACKUP_ROOT""';" INT QUIT TERM EXIT
-  mount -o remount,rw "$BACKUP_ROOT"
+def runprog(*cmdline):
+  p = Popen(cmdline)
+  p.communicate()
+  if p.wait() != 0:
+    raise RBError("'%s' failed" % cmdline[0])
 
-  echo "Synching cur ..."
-  rsync --delete --delete-before --delete-excluded --inplace \
-    --no-whole-file -a $@ "$BACKUP_SRC"/cur/ "$BACKUP_DST"/cur
-  echo "Synching cur ... DONE"
+def runresil(fn, *args, **kwargs):
+  try:
+    fn(*args, **kwargs)
+  except Exception as e:
+    info(e.args[0])
 
-  # sync the snapshot directories
-  for ss in "$BACKUP_SRC"/[0-9]*
-  do
-    # create a new subvolume for this snapshot on the destination if one
-    # doesn't already exist
-    ss_dst="$BACKUP_DST"/`basename $ss`
-    if [ ! -e "$ss_dst" ]
-    then
-      /sbin/btrfs subvolume snapshot "$BACKUP_DST"/cur "$ss_dst"
-    fi
-    echo "Synching `basename $ss` snapshot ..."
-    rsync --delete --delete-before --delete-excluded --inplace \
-      --no-whole-file -a $@ "$ss"/ "$ss_dst"
-    echo "Synching `basename $ss` snapshot ... DONE"
-  done
-  
-;;
+def fatal(msg):
+  info(msg)
+  exit(254)
 
-*)
-  usage
-  exit 255
-;;
-esac
+def info(msg):
+  sys.stderr.write('%s: %s\n' % (prog_name, msg))
+  sys.stderr.flush()
 
-exit 0
+def main():
+  parser = argparse.ArgumentParser(
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    description="rsync/btrfs combo backup system which uses the"
+                " subvolume snapshot facilities of btrfs to"
+                " perform incremental backups"
+  )
+  subparsers = parser.add_subparsers(
+    help="rsyncbtrfs commands",
+    dest="command"
+  )
+
+  def _add_common(parser_a):
+    parser_a.add_argument(
+      'dest_root',
+      metavar='<dest-root>',
+      type=unicode,
+      help="mount point of the backup"
+    )
+    parser_a.add_argument(
+      'dest_dir',
+      metavar='<dest-dir>',
+      type=unicode,
+      help="backup directory"
+    )
+
+  # init arguments
+  parser_a = subparsers.add_parser(
+    'init',
+    help='initialize a backup destination'
+  )
+  _add_common(parser_a)
+
+  # backup arguments
+  parser_a = subparsers.add_parser(
+    'backup',
+    help='perform an incremental backup'
+  )
+  _add_common(parser_a)
+  parser_a.add_argument(
+    'src_dir',
+    metavar='<src_dir>',
+    type=unicode,
+    help="source directory"
+  )
+  parser_a.add_argument(
+    'rsync_args',
+    metavar='...',
+    type=unicode,
+    nargs=argparse.REMAINDER,
+    help="command line options to send to rsync"
+  )
+
+  # organize arguments
+  parser_a = subparsers.add_parser(
+    'organize',
+    help='keep specific snapshots based on given rules and discard rest'
+  )
+  _add_common(parser_a)
+  parser_a.add_argument(
+    '-l', '--list',
+    choices=['keep', 'delete'],
+    help="only show the list of snapshots to be kept/deleted"
+  )
+  parser_a.add_argument(
+    '-s', '--silent',
+    action='store_true',
+    help="suppress confirmation"
+  )
+  parser_a.add_argument(
+    'rules',
+    metavar='<rule>',
+    type=_parse_rule,
+    nargs='+',
+    help="organization rules - format: nLm where both n and m are"
+         " integers and L is one of: s, m, h, D, W, M, Q, Y. n"
+         " combined with L specifies length of interval (e.g."
+         " '7D' is 7 days). m specifies the number of intervals."
+         " E.g. '1D7' tells rsyncbtrfs to keep the latest snapshot"
+         " in each 1 day interval for past 7 intervals (days)."
+  )
+  args = parser.parse_args()
+
+  rsyncbtrfs = RsyncBtrfs(args)
+  rsyncbtrfs.run()
+
+def _parse_rule(value):
+  m = re.match(r'^(\d+)([smhDWMQY])(\d+)$', value)
+  class _args(object):
+    def __init__(self, int_num, int_mul, count):
+      m = {'s': 1, 'm': 60, 'h': 60 * 60, 'D': 60 * 60 * 24,
+           'W': 60 * 60 * 24 * 7, 'M': int(60 * 60 * 24 * 30.4375),
+           'Q': int(60 * 60 * 24 * 91.3125),
+           'Y': int(60 * 60 * 24 * 365.25)}
+      self.interval_desc = "%d%s" % (int_num, int_mul)
+      self.interval = int_num * m[int_mul]
+      self.count = count
+      self.span = self.interval * self.count
+  if m:
+    return _args(int(m.group(1)), m.group(2), int(m.group(3)))
+  else:
+    msg = "%s must be in the form: <int><s|m|h|D|W|M|Q|Y><int>"
+    raise argparse.ArgumentTypeError(msg)
+
+if __name__ == '__main__':
+  main()
