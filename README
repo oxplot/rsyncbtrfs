@@ -74,5 +74,36 @@ backup again, this is how your backup partition will look like:
 At any point in time, cur would have the same content as the latest
 timestamped directory (e.g. cur is same as 2010-12-30-23:00:00).
 
+Now let's say you have backed up every day for past 3 months. At some
+point you're going to stop caring about day to day backups in distant
+past. rsyncbtrfs provides a command called 'organize' which lets you
+define rules based on which certain backups are kept and the rest are
+deleted. Here's an example that would give a feel of what organize can
+do:
+
+Assume you have backups in /backup/sys (with the same structure as above
+examples). We want to keep 1 backup per day for past 7 days, 1 backup
+per week for next 3 weeks after that, 1 backup per fortnight for 8 weeks
+after that and 1 backup per month for next 10 months after that. To
+accomplish this, you can simply run the following:
+
+$ rsyncbtrfs organize /backup /backup/sys 1D7 1W3 2W8 1M10
+
+1D7 means 1 backup in intervals of 1D (1 day) for 7 intervals (7 * 1 day
+= 7 days). 2W8 means 1 backup in intervals of 2W (2 weeks) for 4
+intervals (4 * 2 weeks = 8 weeks), etc. Other letters you can use as
+base unit of intervals are:
+  s for seconds
+  m for minutes
+  h for hours
+  D for days
+  W for weeks
+  M for months
+  Q for quarters
+  Y for years
+
+Also note that the time of last backup is used as reference for all
+intervals you specify.
+
 That's it folks. To see the command line options of rsyncbtrfs, run it
-bare.
+with -h option.

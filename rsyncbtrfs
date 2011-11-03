@@ -4,6 +4,7 @@
 #              incremental backups.
 # Copyright (C) 2011 Mansour <mansour@oxplot.com>
 #
+# TODO give options to choose what time be the reference time
 
 from subprocess import call, Popen, PIPE
 import sys
@@ -36,6 +37,7 @@ class RsyncBtrfs:
     runprog('mount', '-o', 'remount,ro', self.args.dest_root)
 
   def backup(self):
+    self._start_time = time.time()
     self.tmp_mountpt = tempfile.mkdtemp(suffix=prog_name)
     try:
       self._backup_helper()
@@ -60,7 +62,7 @@ class RsyncBtrfs:
             os.path.join(dest_dir, 'cur')]))
     runprog('btrfs', 'subvolume', 'snapshot',
             os.path.join(dest_dir, 'cur'),
-            os.path.join(dest_dir, tmsec2str(time.time())))
+            os.path.join(dest_dir, tmsec2str(self._start_time)))
     
   def organize(self):
     # sort the rules based on interval length
