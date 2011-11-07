@@ -1,10 +1,25 @@
 #!/bin/sh
-rsyncbtrfs backup /backup /backup/sys  / \
+
+# -s options used below suppresses all output and confirmation messages
+# so this script can be called in a cron job without failing due to lack
+# of standard output/error
+
+# backup home, sys and boot partitions
+
+rsyncbtrfs -s backup /backup /backup/sys  / \
   --exclude='/tmp/**' --exclude='/var/lib/mock/**' \
   --exclude='/home/build/**' --exclude='/home/wine/**' \
   --exclude='/var/cache/mock/**' --exclude='/var/tmp/**' \
   --exclude='/var/cache/yum/**' --exclude='/media/**' \
   --exclude='/backup/**'
-rsyncbtrfs backup /backup /backup/home /home/user \
+rsyncbtrfs -s backup /backup /backup/home /home/user \
   --exclude='/Downloads/**' --exclude='/tmp/**'
-rsyncbtrfs backup /backup /backup/boot /boot
+rsyncbtrfs -s backup /backup /backup/boot /boot
+
+# organize all backups to have 1 backup a day for past 7 days, 1 backup
+# a week for the next 4 weeks, 1 backup a month for next 12 month and 1
+# backup a year for next 10 years
+
+rsyncbtrfs -s organize /backup /backup/sys  1D7 1W4 1M12 1Y10
+rsyncbtrfs -s organize /backup /backup/home 1D7 1W4 1M12 1Y10
+rsyncbtrfs -s organize /backup /backup/boot 1D7 1W4 1M12 1Y10
