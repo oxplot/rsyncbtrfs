@@ -17,6 +17,8 @@ import glob
 
 prog_name = 'rsyncbtrfs'
 
+devnull = open(os.devnull, 'w')
+
 class RBError(Exception):
   pass
 
@@ -30,13 +32,22 @@ class RsyncBtrfs:
     except Exception as e:
       fatal(e.args[0])
 
+  def _is_init(self):
+    return os.path.exists(os.path.join(self.args.dest_dir, 'cur'))
+
   def init(self):
+    if self._is_init():
+      raise RBError("'%s' directory is already initialized"
+                    % self.args.dest_dir)
     runprog('mount', '-o', 'remount,rw', self.args.dest_root)
     runprog('btrfs', 'subvolume', 'create',
             os.path.join(self.args.dest_dir, 'cur'))
     runprog('mount', '-o', 'remount,ro', self.args.dest_root)
 
   def backup(self):
+    if not self._is_init():
+      raise RBError("'%s' directory is not initialized - use rsyncbtrfs"
+                    " init first" % self.args.dest_dir)
     self._start_time = time.time()
     self.tmp_mountpt = tempfile.mkdtemp(suffix=prog_name)
     try:
@@ -65,10 +76,14 @@ class RsyncBtrfs:
             os.path.join(dest_dir, tmsec2str(self._start_time)))
     
   def organize(self):
+    if not self._is_init():
+      raise RBError("'%s' directory is not initialized - use rsyncbtrfs"
+                    " init first" % self.args.dest_dir)
     # sort the rules based on interval length
     self.args.rules.sort(
       cmp=lambda a, b: cmp(a.interval, b.interval)
     )
+
     # get the list of snapshots
     snapshots_str = map(os.path.basename, glob.glob(
       os.path.join(self.args.dest_dir, '????-??-??-??:??:??')
@@ -77,6 +92,7 @@ class RsyncBtrfs:
       return
     snapshots_str.sort(reverse=True)
     ss = map(tmstr2sec, snapshots_str)
+
     # for each rule, determine the snapshots to be deleted
     cur_ss, deletes, start_ts = 0, [], ss[0]
     for cur_rule in self.args.rules:
@@ -98,6 +114,7 @@ class RsyncBtrfs:
       start_ts = end_ts
     # add all the unpicked ones to delete set
     deletes.extend(snapshots_str[cur_ss:])
+
     # do we just print the list?
     if self.args.list:
       if self.args.list == 'keep':
@@ -108,16 +125,20 @@ class RsyncBtrfs:
         for d in deletes:
           print d
       return
+
     # if we got nothing to delete, don't bother
     if not deletes:
       return
+
     # delete all the marked snapshots
-    print "%d of total %d snapshots will be deleted." \
-          % (len(deletes), len(snapshots_str))
-    print "To see a list, use -l option."
-    confirm = raw_input('Continue (y/N)? ')
-    if confirm.strip().lower() != 'y':
-      return
+    if not self.args.silent:
+      print "%d of total %d snapshots will be deleted." \
+            % (len(deletes), len(snapshots_str))
+      print "To see a list, use -l option."
+      confirm = raw_input('Continue (y/N)? ')
+      if confirm.strip().lower() != 'y':
+        return
+
     runprog('mount', '-o', 'remount,rw', self.args.dest_root)
     try:
       for d in deletes:
@@ -143,7 +164,7 @@ def tmsec2str(t):
           ts.tm_hour, ts.tm_min, ts.tm_sec)
 
 def runprog(*cmdline):
-  p = Popen(cmdline)
+  p = Popen(cmdline, stdout=sys.stdout, stderr=sys.stderr)
   p.communicate()
   if p.wait() != 0:
     raise RBError("'%s' failed" % cmdline[0])
@@ -168,6 +189,13 @@ def main():
     description="rsync/btrfs combo backup system which uses the"
                 " subvolume snapshot facilities of btrfs to"
                 " perform incremental backups"
+  )
+  parser.add_argument(
+    '-s', '--silent',
+    action='store_true',
+    help="suppress user confirmation messages as well as other output"
+         " messages - BE CAREFUL if used with organize command, the"
+         " relevant snapshots will be deleted without any warnings"
   )
   subparsers = parser.add_subparsers(
     help="rsyncbtrfs commands",
@@ -224,12 +252,8 @@ def main():
   parser_a.add_argument(
     '-l', '--list',
     choices=['keep', 'delete'],
-    help="only show the list of snapshots to be kept/deleted"
-  )
-  parser_a.add_argument(
-    '-s', '--silent',
-    action='store_true',
-    help="suppress confirmation"
+    help="only show the list of snapshots to be kept/deleted and don't"
+         " actually delete anything"
   )
   parser_a.add_argument(
     'rules',
@@ -244,6 +268,10 @@ def main():
          " in each 1 day interval for past 7 intervals (days)."
   )
   args = parser.parse_args()
+
+  if args.silent:
+    sys.stderr = devnull
+    sys.stdout = devnull
 
   rsyncbtrfs = RsyncBtrfs(args)
   rsyncbtrfs.run()
