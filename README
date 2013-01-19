@@ -74,5 +74,18 @@ backup again, this is how your backup partition will look like:
 At any point in time, cur would have the same content as the latest
 timestamped directory (e.g. cur is same as 2010-12-30-23:00:00).
 
+To take full advantage of btrfs COW functionality, you may want to add
+rsync's --inplace flag. This flag tells rsync to only write the updated
+data in a file instead of creating a new copy and moving it into place.
+Using this flag has several (possibly negative) side effects which you
+should be aware of. Consult rsync's man page for further details.
+Here's an example usage of this flag with rsyncbtrfs:
+
+$ rsyncbtrfs backup /backup /backup/sys / --inplace
+
+rsyncbtrfs by default adds the following flags to rsync:
+
+ --delete --delete-excluded --no-whole-file
+
 That's it folks. To see the command line options of rsyncbtrfs, run it
 bare.
