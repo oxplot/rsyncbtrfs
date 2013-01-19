@@ -2,7 +2,7 @@
 # rsyncbtrfs - an rsync/btrfs combo backup system which uses the
 #              subvolume snapshot facilities of btrfs to perform
 #              incremental backups.
-# Copyright (C) 2010 Mansour <mansour@oxplot.com>
+# Copyright (C) 2010 Mansour Behabadi <mansour@oxplot.com>
 #
 
 usage() {
