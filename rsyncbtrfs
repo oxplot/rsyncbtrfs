@@ -6,29 +6,41 @@
 #
 
 usage() {
-  echo "Usage: rsyncbtrfs {init|backup} arg arg ...
+  echo "Usage: rsyncbtrfs {init|backup} ...
 
-  init <dst>                  initialize a backup directory
+  init <dst>        Initialize a backup directory.
 
-  backup <src> <dst> <args>   backup src to dst, passing <args>
-                              to rsync
-
+  backup [--bind-mount] <src> <dst> [<arg> [<arg> ...]]
+                    Backup src to dst, passing <args> to rsync.
+                    Use --bind-mount to bind-mount <src> under
+                    a temp directory before backing it up.
 "
+  exit 255
 }
 
 case $1 in
 
 init)
-  [ $# -ge 2 ] || { usage $0; exit 255; }
+  [ $# -ge 2 ] || usage
   touch "$2/.rsyncbtrfs"
 ;;
 
 backup)
-  [ $# -ge 3 ] || { usage $0; exit 255; }
-  BACKUP_SRC="$2"
-  BACKUP_DST="$3"
 
-  shift 3
+  shift 1
+
+  BIND_MOUNT=N
+  if [ "$1" = '--bind-mount' ]
+  then
+    BIND_MOUNT=Y
+    shift 1
+  fi
+
+  [ $# -ge 2 ] || usage
+  BACKUP_SRC="$1"
+  BACKUP_DST="$2"
+
+  shift 2
 
   # We do a simple check to prevent situations where the backup dst is
   # mistyped.
@@ -39,22 +51,27 @@ backup)
     exit 254
   fi
 
-  # We don't want to have bind mounted source lying around in case of
-  # errors.
-
   TMP_INPROG="`mktemp -d "$BACKUP_DST/.inprog-XXXXXXX"`"
   TMP_MOUNT="`mktemp -d --tmpdir rsyncbtrfs-XXXXXXX`"
   NEW_SUBVOL="`date +%F-%T`"
+
+  # Cleanup handlers
  
   trap "
-    umount "'"'"$TMP_MOUNT"'"'";
+    umount "'"'"$TMP_MOUNT"'"'" &>/dev/null;
     rmdir "'"'"$TMP_MOUNT"'"'";
     btrfs subvolume delete "'"'"$TMP_INPROG/vol"'"'" &>/dev/null;
     rm -f "'"'"$TMP_INPROG/cur"'"'";
     rmdir "'"'"$TMP_INPROG"'"'";
   " INT QUIT TERM EXIT
   
-  mount --bind "$BACKUP_SRC" "$TMP_MOUNT" || exit 253
+  if [ "$BIND_MOUNT" = 'Y' ]
+  then
+    mount --bind "$BACKUP_SRC" "$TMP_MOUNT" || exit 253
+    RSYNC_SRC="$TMP_MOUNT"
+  else
+    RSYNC_SRC="$BACKUP_SRC"
+  fi
 
   # Decide if the first subvolume is created or the current one is
   # snapshotted.
@@ -72,7 +89,7 @@ backup)
 
   rsync --delete --delete-before --delete-excluded --inplace \
     --no-whole-file -a $@ \
-    "$TMP_MOUNT/" "$TMP_INPROG/vol" || exit 253
+    "$RSYNC_SRC/" "$TMP_INPROG/vol" || exit 253
 
   # Move the new backup subvolume to its final path
 
@@ -93,7 +110,6 @@ backup)
 
 *)
   usage
-  exit 255
 ;;
 esac
 
