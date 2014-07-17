@@ -1,5 +1,5 @@
 rsyncbtrfs is a small shell script that does incremental backups under
-linux using [rsync][] on [btrfs][] paritions.
+linux using [rsync][] on [btrfs][] partitions.
 
 Requirements
 ============
