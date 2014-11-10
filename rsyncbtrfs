@@ -58,9 +58,9 @@ backup)
   # Cleanup handlers
  
   trap "
-    umount "'"'"$TMP_MOUNT"'"'" &>/dev/null;
+    umount "'"'"$TMP_MOUNT"'"'" >/dev/null 2>&1;
     rmdir "'"'"$TMP_MOUNT"'"'";
-    btrfs subvolume delete "'"'"$TMP_INPROG/vol"'"'" &>/dev/null;
+    btrfs subvolume delete "'"'"$TMP_INPROG/vol"'"'" >/dev/null 2>&1;
     rm -f "'"'"$TMP_INPROG/cur"'"'";
     rmdir "'"'"$TMP_INPROG"'"'";
   " INT QUIT TERM EXIT
