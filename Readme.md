@@ -46,6 +46,10 @@ Simple enough. Just a note on `--exclude` option: any argument after the
 destination is passed onto rsync. Here, we're excluding `/home` because
 we don't want to duplicate the backup of `/home/joe`.
 
+If a file named ~/.rsyncbtrfs_excludes is found, the contents of that file
+will be included in the arguments passed to rsync as `--exclude_from=`.
+The format of the file is the normal rsync `--exclude_from` file format
+
 After the backup above, this is what `/backup` would look like:
 
     $ ls /backup/sys
