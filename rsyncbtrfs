@@ -27,6 +27,9 @@ init)
 
 backup)
 
+EXCLUDES_FILE="${HOME}/.rsyncbtrfs_excludes"
+EXCLUDE_ARG=""
+
   shift 1
 
   BIND_MOUNT=N
@@ -55,8 +58,15 @@ backup)
   TMP_MOUNT="`mktemp -d --tmpdir rsyncbtrfs-XXXXXXX`"
   NEW_SUBVOL="`date +%F-%T`"
 
+# check for ~/.rsyncbtrfs_excludes
+
+if [ -f "$EXCLUDES_FILE" ]
+then
+	EXCLUDE_ARG=" --exclude-from=$EXCLUDES_FILE "
+fi
+
   # Cleanup handlers
- 
+
   trap '
     umount "$TMP_MOUNT" >/dev/null 2>&1
     rmdir "$TMP_MOUNT"
@@ -64,7 +74,7 @@ backup)
     rm -f "$TMP_INPROG/cur"
     rmdir "$TMP_INPROG"
   ' INT QUIT TERM EXIT
-  
+
   if [ "$BIND_MOUNT" = 'Y' ]
   then
     mount --bind "$BACKUP_SRC" "$TMP_MOUNT" || exit 253
@@ -87,7 +97,7 @@ backup)
 
   # Do the backup.
 
-  rsync --delete --delete-before --delete-excluded --inplace \
+  rsync --delete --delete-before --delete-excluded --inplace $EXCLUDE_ARG \
     --no-whole-file -a $@ \
     "$RSYNC_SRC/" "$TMP_INPROG/vol" || exit 253
 
