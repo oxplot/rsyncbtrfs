@@ -82,6 +82,9 @@ source:
 
     $ rsyncbtrfs backup --bind-mount / /backup/sys
 
+`--bind-mount` differs from rsync's `-x` in that it lets you backup any
+content hidden under the mount points.
+
 The `--compress` argument enable the compression attribute on the new
 snapshot directory. Whether the files are compressed or not depend on
 the compression configuration of the Btrfs volume.
