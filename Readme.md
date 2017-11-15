@@ -82,6 +82,13 @@ source:
 
     $ rsyncbtrfs backup --bind-mount / /backup/sys
 
+`--bind-mount` differs from rsync's `-x` in that it lets you backup any
+content hidden under the mount points.
+
+The `--compress` argument enable the compression attribute on the new
+snapshot directory. Whether the files are compressed or not depend on
+the compression configuration of the Btrfs volume.
+
 To take full advantage of btrfs COW functionality, `--inplace` flag of
 rsync is used by default. This flag tells rsync to only write the
 updated data in a file instead of creating a new copy and moving it into

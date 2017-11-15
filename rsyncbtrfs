@@ -10,7 +10,7 @@ usage() {
 
   init <dst>        Initialize a backup directory.
 
-  backup [--bind-mount] <src> <dst> [<arg> [<arg> ...]]
+  backup [--bind-mount] [--compress] <src> <dst> [<arg> [<arg> ...]]
                     Backup src to dst, passing <args> to rsync.
                     Use --bind-mount to bind-mount <src> under
                     a temp directory before backing it up.
@@ -30,11 +30,17 @@ backup)
   shift 1
 
   BIND_MOUNT=N
-  if [ "$1" = '--bind-mount' ]
-  then
-    BIND_MOUNT=Y
-    shift 1
-  fi
+  COMPRESS=N
+  while [ $# -gt 0 ]
+  do
+    case "$1" in
+      --bind-mount)  BIND_MOUNT=Y;;
+      --compress)    COMPRESS=Y;;
+      -*)            echo "Invalid backup option $1"; echo; usage;;
+      *)             break;;
+    esac
+    shift
+  done
 
   [ $# -ge 2 ] || usage
   BACKUP_SRC="$1"
@@ -83,6 +89,10 @@ backup)
       "$TMP_INPROG/vol" || exit 253
   else
     btrfs subvolume create "$TMP_INPROG/vol" || exit 253
+    if [ "$COMPRESS" = 'Y' ]
+    then
+      chattr +c "$TMP_INPROG/vol" || exit 253
+    fi
   fi
 
   # Do the backup.
